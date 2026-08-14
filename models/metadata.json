@@ -1,0 +1,56 @@
+{
+  "model_type": "LogisticRegression",
+  "trained_at_utc": "2026-08-14T01:24:50.113184+00:00",
+  "sklearn_version": "1.6.0",
+  "python_version": "3.11.15",
+  "train_rows": 8000,
+  "test_rows": 2000,
+  "class_balance": {
+    "total": 10000,
+    "class_0_stayed": {
+      "count": 7963,
+      "pct": 79.63
+    },
+    "class_1_churned": {
+      "count": 2037,
+      "pct": 20.37
+    }
+  },
+  "metrics_test_set": {
+    "accuracy": 0.7115,
+    "precision": 0.3861,
+    "recall": 0.7076,
+    "f1_score": 0.4996,
+    "roc_auc": 0.777,
+    "confusion_matrix": {
+      "true_negative": 1135,
+      "false_positive": 458,
+      "false_negative": 119,
+      "true_positive": 288
+    }
+  },
+  "auc_threshold": 0.75,
+  "gate_passed": true,
+  "features": {
+    "categorical": [
+      "Geography",
+      "Gender",
+      "AgeGroup (derivado de Age)"
+    ],
+    "numeric": [
+      "CreditScore",
+      "Age",
+      "Tenure",
+      "Balance",
+      "NumOfProducts",
+      "HasCrCard",
+      "IsActiveMember",
+      "EstimatedSalary"
+    ],
+    "excluded_identifiers": [
+      "RowNumber",
+      "CustomerId",
+      "Surname"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+[project]
+name = "churn-mlops-service"
+version = "1.0.0"
+description = "Servicio MLOps end-to-end para predicción de churn (regresión logística)."
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+exclude = ["notebooks", ".venv", "models", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --cov=app --cov=training --cov-report=term-missing"

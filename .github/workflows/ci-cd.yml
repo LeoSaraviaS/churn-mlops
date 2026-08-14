@@ -1,0 +1,171 @@
+name: CI/CD - churn-api
+
+# Se ejecuta en cada push y en cada PR contra main. El deploy real a Cloud
+# Run sólo corre en pushes a main (nunca en PRs) y sólo si las variables de
+# GCP están configuradas en el repo (ver jobs docker-build/deploy) — así el
+# pipeline completo queda listo desde ya, aunque el proyecto/billing de GCP
+# todavía no exista, sin que eso rompa el resto del pipeline.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  # 1) LINT: primer gate, rápido y barato. Si el código no pasa estilo/errores
+  #    estáticos, no tiene sentido gastar tiempo entrenando ni testeando.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Instalar dependencias de desarrollo
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff (lint)
+        run: ruff check .
+
+  # 2) TEST: unit + integration tests. Entrena un modelo real y rápido (el
+  #    dataset son 10k filas, entrena en segundos) para que los tests de
+  #    predictor/API/métricas corran contra un modelo real, no un mock.
+  test:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Instalar dependencias de desarrollo
+        run: pip install -r requirements-dev.txt
+
+      - name: Entrenar modelo para tests
+        run: python -m training.train
+
+      - name: Pytest
+        run: pytest
+
+  # 3) TRAIN-AND-GATE: entrena el modelo "de verdad" para producción y
+  #    bloquea el pipeline si la calidad (ROC-AUC) no supera el umbral
+  #    mínimo. El artifact resultante (model.joblib + metadata.json) es el
+  #    que se empaqueta en la imagen Docker en el job siguiente — así el
+  #    modelo que se despliega es siempre uno que pasó el gate, nunca uno
+  #    committeado a mano y potencialmente desactualizado.
+  train-and-gate:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: "pip"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Entrenar y validar gate de calidad (ROC-AUC >= 0.75)
+        run: python -m training.train --auc-threshold 0.75
+
+      - name: Publicar artifact del modelo
+        uses: actions/upload-artifact@v4
+        with:
+          name: trained-model
+          path: |
+            models/model.joblib
+            models/metadata.json
+          retention-days: 14
+
+  # 4) DOCKER-BUILD: construye la imagen con el modelo recién gateado y la
+  #    publica en Artifact Registry. Sólo corre si el repo ya tiene
+  #    configuradas las variables de GCP (vars.GCP_PROJECT_ID) — mientras el
+  #    proyecto de GCP con billing no exista, este job se salta limpiamente
+  #    en vez de fallar el pipeline completo.
+  docker-build:
+    needs: train-and-gate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_PROJECT_ID != ''
+    permissions:
+      contents: "read"
+      id-token: "write"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar artifact del modelo gateado
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model
+          path: models/
+
+      - name: Autenticar en GCP
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configurar gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configurar Docker para Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      # buildx + cache-to type=gha requiere explícitamente el driver
+      # docker-container (el driver "docker" por defecto no soporta
+      # exportar cache a GHA: error "Cache export is not supported").
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & push de la imagen
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/churn-api/churn-api:${{ github.sha }}
+            ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/churn-api/churn-api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # 5) DEPLOY: despliega la imagen recién publicada a Cloud Run y corre un
+  #    smoke test real contra /health en la URL pública del servicio.
+  deploy:
+    needs: docker-build
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_PROJECT_ID != ''
+    environment: production
+    permissions:
+      contents: "read"
+      id-token: "write"
+    steps:
+      - name: Autenticar en GCP
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configurar gcloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy a Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v3
+        with:
+          service: churn-api
+          region: ${{ vars.GCP_REGION }}
+          image: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/churn-api/churn-api:${{ github.sha }}
+          flags: --allow-unauthenticated --memory=512Mi --min-instances=0 --max-instances=3
+
+      - name: Smoke test contra /health
+        run: |
+          curl -fsS "${{ steps.deploy.outputs.url }}/health" | tee health_response.json
+          grep -q '"status":"ok"' health_response.json

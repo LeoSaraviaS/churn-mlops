@@ -1,0 +1,19 @@
+# Uso local: `docker compose up --build`
+# Sirve para probar la imagen exactamente como corre en Cloud Run, pero en
+# el computador del desarrollador, antes de hacer push a GitHub.
+services:
+  api:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - APP_NAME=churn-api
+      - MODEL_PATH=models/model.joblib
+      - METADATA_PATH=models/metadata.json
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
