@@ -62,7 +62,23 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "metrics": "/metrics",
+        "model_schema": "/model/schema",
     }
+
+
+@app.get("/model/schema", tags=["ops"])
+def model_schema() -> dict:
+    try:
+        version = get_predictor().version
+    except ModelNotLoadedError:
+        version = "unknown"
+
+    return {
+        "model_version": version,
+        "input_schema": ChurnPredictionRequest.model_json_schema(),
+        "output_schema": ChurnPredictionResponse.model_json_schema(),
+    }
+
 
 
 @app.post("/predict", response_model=ChurnPredictionResponse, tags=["inference"])

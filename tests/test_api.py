@@ -64,6 +64,15 @@ def test_predict_invalid_payload_returns_422_not_500(client):
     response = client.post("/predict", json=invalid_payload)
     assert response.status_code == 422
 
+def test_model_schema_returns_input_and_output_contracts(client):
+    response = client.get("/model/schema")
+    assert response.status_code == 200
+    body = response.json()
+    assert "model_version" in body
+    assert body["input_schema"]["title"] == "ChurnPredictionRequest"
+    assert body["output_schema"]["title"] == "ChurnPredictionResponse"
+    assert "CreditScore" in body["input_schema"]["properties"]
+
 
 def test_predict_missing_field_returns_422(client):
     payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "CreditScore"}
