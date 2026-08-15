@@ -7,10 +7,10 @@ name: CI/CD - churn-api
 # todavía no exista, sin que eso rompa el resto del pipeline.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*.*.*"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   PYTHON_VERSION: "3.12"
