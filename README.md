@@ -12,6 +12,10 @@ Proyecto desarrollado para la asignatura de MLOps (UAI) — pauta "Servicio MLOp
 - Jonathan Machuca
 - Hemersson Gutiérrez
 
+## Uso de IA en el desarrollo
+
+Como equipo utilizamos **IA (Claude, Anthropic)** durante el desarrollo de este proyecto, principalmente como **potenciador del trabajo del equipo y no como reemplazo del criterio propio**: consultas conceptuales (MLOps, buenas prácticas de CI/CD, estructura del pipeline), apoyo en la redacción y organización de este README, y ayuda puntual en aspectos de programación (por ejemplo, la implementación del `ColumnTransformer`/`Pipeline` de scikit-learn, la configuración del workflow de GitHub Actions y la escritura de tests). Las decisiones de modelado, las desviaciones documentadas respecto al notebook original (sección 4) y la validación de los resultados fueron revisadas y decididas por el equipo.
+
 ## 1. El problema: modelo de churn
 
 Este servicio predice, para un cliente bancario dado, la **probabilidad de que abandone el banco (churn)**. La variable objetivo es `Exited` (1 = el cliente se fue, 0 = el cliente se quedó).
@@ -57,6 +61,15 @@ Pipeline fiel al notebook de referencia, implementado en `training/model.py`:
 
 **Features utilizadas:** `CreditScore`, `Geography`, `Gender`, `Age`, `Tenure`, `Balance`, `NumOfProducts`, `HasCrCard`, `IsActiveMember`, `EstimatedSalary` (+ `AgeGroup` derivado).
 **Columnas excluidas siempre:** `RowNumber`, `CustomerId`, `Surname` (identificadores, sin valor predictivo y con datos personales).
+
+### Reproducibilidad (semilla fija)
+
+Para que los resultados sean replicables entre corridas, todos los puntos con aleatoriedad usan `random_state = 42` por defecto:
+
+- **Split train/test** (`train_test_split` en `training/data.py::get_dataset`).
+- **Modelo** (`LogisticRegression(..., random_state=42)` en `training/model.py::build_model`).
+
+`training/train.py` expone además el flag `--random-state` (default `42`) para dejarlo explícito al entrenar, y el valor efectivo queda registrado en `models/metadata.json` (campo `random_state`) junto con las métricas de cada corrida, de modo que el modelo publicado y sus métricas siempre queden trazados a la semilla con la que se generaron.
 
 ### Desviaciones documentadas respecto al notebook original
 
