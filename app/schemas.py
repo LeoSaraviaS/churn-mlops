@@ -55,6 +55,25 @@ class ChurnPredictionResponse(BaseModel):
     model_version: str
 
 
+class BatchPredictionRequest(BaseModel):
+    """Lista de clientes para /predict/batch.
+
+    min_length=1 evita un batch vacio (422 en vez de una respuesta sin
+    sentido); el tope maximo se valida en el endpoint contra
+    settings.max_batch_size, no aqui, para no acoplar el contrato a la
+    configuracion de runtime.
+    """
+
+    customers: list[ChurnPredictionRequest] = Field(..., min_length=1)
+
+
+class BatchPredictionResponse(BaseModel):
+    predictions: list[ChurnPredictionResponse]
+    n_customers: int
+    n_predicted_churn: int = Field(..., description="Cuantos de la lista quedaron en clase 1")
+    mean_churn_probability: float = Field(..., ge=0, le=1)
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok"]
     model_loaded: bool
