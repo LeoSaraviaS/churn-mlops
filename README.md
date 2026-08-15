@@ -152,13 +152,72 @@ uvicorn app.main:app --reload --port 8080
 docker compose up --build
 ```
 
-Prueba real ejecutada durante el desarrollo (servidor local, mismo código que corre en el contenedor):
+### Ejemplos de uso (curl)
 
+Con el servicio arriba en `http://localhost:8080`, estos comandos se copian y pegan tal cual. Las respuestas son reales, capturadas contra el servicio corriendo en local.
+
+**Estado del servicio:**
+
+```bash
+curl -s http://localhost:8080/health
 ```
-GET  /health   -> {"status":"ok","model_loaded":true,"model_version":"2026-08-14T01:24:50..."}
-POST /predict  -> {"churn_prediction":0,"churn_probability":0.3564,"risk_level":"medium",...}
-POST /predict (input inválido, Geography="Chile") -> HTTP 422 (nunca 500)
+
+```json
+{"status":"ok","model_loaded":true,"model_version":"2026-08-14T01:24:50.113184+00:00"}
 ```
+
+**Predicción de un cliente:**
+
+```bash
+curl -s -X POST http://localhost:8080/predict \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "CreditScore": 650, "Geography": "France", "Gender": "Female", "Age": 40,
+    "Tenure": 3, "Balance": 75000.0, "NumOfProducts": 2, "HasCrCard": 1,
+    "IsActiveMember": 1, "EstimatedSalary": 100000.0
+  }'
+```
+
+```json
+{"churn_prediction":0,"churn_probability":0.3564,"risk_level":"medium","model_version":"2026-08-14T01:24:50.113184+00:00"}
+```
+
+**Entrada inválida — 422, nunca un 500 genérico:**
+
+```bash
+curl -s -X POST http://localhost:8080/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"CreditScore": 650, "Geography": "Chile", "Gender": "Female", "Age": 40,
+       "Tenure": 3, "Balance": 75000.0, "NumOfProducts": 2, "HasCrCard": 1,
+       "IsActiveMember": 1, "EstimatedSalary": 100000.0}'
+```
+
+```json
+{"detail":[{"type":"literal_error","loc":["body","Geography"],"msg":"Input should be 'France', 'Spain' or 'Germany'","input":"Chile","ctx":{"expected":"'France', 'Spain' or 'Germany'"}}]}
+```
+
+**Predicción por lote (`/predict/batch`):**
+
+```bash
+curl -s -X POST http://localhost:8080/predict/batch \
+  -H 'Content-Type: application/json' \
+  -d '{"customers": [
+    {"CreditScore":650,"Geography":"France","Gender":"Female","Age":40,"Tenure":3,"Balance":75000.0,"NumOfProducts":2,"HasCrCard":1,"IsActiveMember":1,"EstimatedSalary":100000.0},
+    {"CreditScore":600,"Geography":"Germany","Gender":"Male","Age":55,"Tenure":1,"Balance":0.0,"NumOfProducts":1,"HasCrCard":0,"IsActiveMember":0,"EstimatedSalary":40000.0}
+  ]}'
+```
+
+```json
+{"predictions":[{"churn_prediction":0,"churn_probability":0.3564,"risk_level":"medium","model_version":"2026-08-14T01:24:50.113184+00:00"},{"churn_prediction":1,"churn_probability":0.8318,"risk_level":"high","model_version":"2026-08-14T01:24:50.113184+00:00"}],"n_customers":2,"n_predicted_churn":1,"mean_churn_probability":0.5941}
+```
+
+**Contrato del modelo (`/model/schema`):**
+
+```bash
+curl -s http://localhost:8080/model/schema
+```
+
+Devuelve el tipo, versión y métricas del modelo, más el contrato de entrada completo (features, tipos y valores permitidos) generado directo desde el esquema Pydantic.
 
 ### Tests y calidad de código
 
@@ -208,3 +267,24 @@ gcloud run deploy churn-api \
 ```
 
 Cloud Run inyecta la variable de entorno `PORT`; el `Dockerfile` respeta esa variable en tiempo de ejecución (`CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT}`).
+
+## 10. Limitaciones conocidas
+
+Declaradas con honestidad técnica, verificadas durante el desarrollo:
+
+- **Precision baja en la clase de interés (0.386).** De cada 10 clientes que el modelo marca como riesgo de fuga, más de 6 no se habrían ido. Es una consecuencia de priorizar recall (0.708) sobre precision para este caso de negocio — perder un cliente cuesta más que ofrecer una retención de más — pero implica que una campaña basada en estas predicciones gasta en clientes que no la necesitaban.
+- **Sin validación temporal.** El split es aleatorio estratificado, no por fecha; el dataset no trae marca temporal, así que no se puede verificar si el modelo se degrada con el tiempo.
+- **El servicio no distingue "degradado" de "caído".** Si el artefacto del modelo falta o está corrupto al arrancar, todo el proceso falla en el arranque (`Application startup failed`) en vez de levantar en un estado degradado con `/health` reportándolo. No hay term medio entre "todo funciona" y "no responde nada".
+- **El CI/CD solo valida automáticamente contra `main`.** Los PRs hacia `dev` (la rama de integración del equipo) no disparan el pipeline todavía; se depende de que cada integrante corra `pytest`/`ruff` en local antes de mergear.
+- **El job de build y despliegue a Cloud Run aún no se ha ejecutado en CI.** Está condicionado a que existan las variables `GCP_PROJECT_ID`/`GCP_REGION` y el secret `GCP_SA_KEY`, que todavía no están configurados en el repositorio.
+- **La imagen Docker pesa cerca de 1.2 GB.** El `Dockerfile` no usa build multi-etapa y deja instalado `build-essential` en la imagen final, lo que afecta el tiempo de arranque en frío en un entorno serverless.
+- **No hay validación de rango ni detección de drift.** Una predicción sobre un cliente con valores muy fuera de lo visto en entrenamiento (por ejemplo, `Balance` extremadamente alto) se sirve igual, sin ninguna advertencia.
+
+### Qué haríamos con más tiempo
+
+- Reducir el peso de la imagen con un build multi-etapa, separando las dependencias de compilación del runtime.
+- Agregar validación de rango de entrada contra la distribución de entrenamiento, para avisar cuando una predicción cae fuera de lo que el modelo conoce.
+- Terminar de configurar el despliegue real en Cloud Run y verificar el pipeline completo (`docker-build` → `deploy` → smoke test) corriendo de punta a punta en CI, no solo en local.
+- Extender los triggers de CI para que también corran sobre `dev`, y no solo sobre `main`.
+- Registrar los modelos con MLflow en vez de embeber el artefacto directamente en la imagen.
+- Explorar un ajuste de umbral de decisión, o un modelo distinto, para mejorar la precision sin sacrificar tanto recall.
