@@ -78,3 +78,47 @@ def test_predict_missing_field_returns_422(client):
     payload = {k: v for k, v in VALID_PAYLOAD.items() if k != "CreditScore"}
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
+
+
+def test_predict_batch_returns_one_prediction_per_customer(client):
+    response = client.post("/predict/batch", json={"customers": [VALID_PAYLOAD, VALID_PAYLOAD]})
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["predictions"]) == 2
+    assert body["n_customers"] == 2
+
+
+def test_predict_batch_matches_individual_predict(client):
+    """El batch no puede dar un resultado distinto al endpoint de a uno."""
+    individual = client.post("/predict", json=VALID_PAYLOAD).json()["churn_probability"]
+    batch = client.post("/predict/batch", json={"customers": [VALID_PAYLOAD]}).json()
+    assert batch["predictions"][0]["churn_probability"] == individual
+
+
+def test_predict_batch_summary_is_consistent_with_predictions(client):
+    response = client.post(
+        "/predict/batch", json={"customers": [VALID_PAYLOAD, VALID_PAYLOAD, VALID_PAYLOAD]}
+    )
+    body = response.json()
+    probabilidades = [p["churn_probability"] for p in body["predictions"]]
+    assert body["mean_churn_probability"] == round(sum(probabilidades) / len(probabilidades), 4)
+    assert body["n_predicted_churn"] == sum(p["churn_prediction"] for p in body["predictions"])
+
+
+def test_predict_batch_rejects_empty_list(client):
+    response = client.post("/predict/batch", json={"customers": []})
+    assert response.status_code == 422
+
+
+def test_predict_batch_rejects_a_single_invalid_customer_in_the_list(client):
+    invalid = {**VALID_PAYLOAD, "Geography": "InvalidCountry"}
+    response = client.post("/predict/batch", json={"customers": [VALID_PAYLOAD, invalid]})
+    assert response.status_code == 422
+
+
+def test_predict_batch_rejects_batch_over_the_configured_limit(client):
+    from app.config import get_settings
+
+    limit = get_settings().max_batch_size
+    response = client.post("/predict/batch", json={"customers": [VALID_PAYLOAD] * (limit + 1)})
+    assert response.status_code == 413

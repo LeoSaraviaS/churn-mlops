@@ -58,6 +58,21 @@ class Predictor:
         prediction = int(proba >= 0.5)
         return prediction, proba
 
+    def predict_batch(self, requests: list[ChurnPredictionRequest]) -> list[tuple[int, float]]:
+        """Predice sobre N clientes en una sola llamada vectorizada.
+
+        Construir un DataFrame de N filas y llamar a predict_proba una vez
+        es lo que hace que un batch de 200 clientes no tarde 200 veces lo que
+        tarda una prediccion sola: el costo fijo de la llamada al modelo se
+        paga una unica vez, no por fila.
+        """
+        if self._model is None:
+            raise ModelNotLoadedError("El modelo no está cargado.")
+
+        frame = pd.DataFrame([r.model_dump() for r in requests])
+        probabilities = self._model.predict_proba(frame)[:, 1]
+        return [(int(proba >= 0.5), float(proba)) for proba in probabilities]
+
     @staticmethod
     def risk_level(probability: float) -> str:
         if probability < 0.33:
