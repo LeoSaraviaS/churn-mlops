@@ -98,6 +98,12 @@ Matriz de confusión: TN=1135, FP=458, FN=119, TP=288.
 
 El pipeline de CI/CD exige `ROC-AUC >= 0.75` para que el modelo pase el gate de calidad (`training/evaluate.py::summarize_for_gate`) — este modelo lo supera (0.777).
 
+#### Curva ROC
+
+![Curva ROC del modelo de churn](docs/images/roc_curve.png)
+
+Curva ROC calculada sobre el test set (2.000 filas, `random_state=42`, ver sección de [Reproducibilidad](#reproducibilidad-semilla-fija)). El área bajo la curva (ROC-AUC = **0.7770**) mide la capacidad del modelo de separar clientes que abandonan de los que se quedan, independientemente del umbral de decisión elegido
+
 ## 5. Estructura del proyecto
 
 ```
