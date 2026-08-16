@@ -2,7 +2,26 @@
 
 Servicio de **predicción de fuga de clientes (customer churn)** para una entidad bancaria, expuesto como API REST. El modelo es una **regresión logística** entrenada sobre el dataset `Churn_Modelling.csv`, empaquetado con FastAPI, containerizado con Docker y desplegado en **Google Cloud Run** mediante un pipeline de CI/CD automatizado con GitHub Actions.
 
-Proyecto desarrollado para la asignatura de MLOps (UAI) — pauta "Servicio MLOps end-to-end".
+---
+## Servicio en producción (Google Cloud Run)
+
+**URL pública:** https://churn-api-373252903708.southamerica-west1.run.app
+*(reemplazar por la URL exacta que entregue el job `deploy` de Actions)*
+
+Probar sin instalar nada:
+
+```bash
+# Estado del servicio (200 OK sobre HTTPS)
+curl -s https://churn-api-373252903708.southamerica-west1.run.app/health
+
+# Predicción real
+curl -s -X POST https://churn-api-373252903708.southamerica-west1.run.app/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"CreditScore":650,"Geography":"France","Gender":"Female","Age":40,"Tenure":3,"Balance":75000.0,"NumOfProducts":2,"HasCrCard":1,"IsActiveMember":1,"EstimatedSalary":100000.0}'
+```
+
+**Proveedor:** Google Cloud Run · **Plan:** capa gratuita (cuenta de facturación estándar, sin crédito de $300).
+**Cold start:** el servicio escala a cero. La **primera** petición tras un rato de inactividad puede tardar **varios segundos** (por el peso de la imagen, puede superar 10–15 s). **No está caído**. Luego, la segunda respuesta ya es inmediata.
 
 ## Integrantes del equipo
 
@@ -108,7 +127,7 @@ Curva ROC calculada sobre el test set (2.000 filas, `random_state=42`, ver secci
 
 ```
 churn-mlops-service/
-├── .github/workflows/ci-cd.yml   # Pipeline CI/CD (5 jobs)
+├── .github/workflows/ci-cd.yml   # Pipeline CI/CD (lint→test→gate→smoke→build→deploy + ghcr)
 ├── app/
 │   ├── main.py                   # Endpoints FastAPI
 │   ├── schemas.py                # Contratos Pydantic (request/response)
@@ -125,7 +144,7 @@ churn-mlops-service/
 │   └── metadata.json              # Métricas, balance de clases, versión
 ├── data/
 │   └── Churn_Modelling.csv        # Dataset original
-├── tests/                         # 25 tests (unit + integración)
+├── tests/                         # 32 tests (unit + integración)
 ├── docs/
 │   └── informe.pdf                # Informe del proyecto (entregable)
 ├── Dockerfile
@@ -246,13 +265,17 @@ http_requests_total{handler="/predict",method="POST",status="4xx"} 1.0
 
 ## 8. CI/CD (GitHub Actions)
 
-`.github/workflows/ci-cd.yml` encadena 5 jobs como gates secuenciales:
+`.github/workflows/ci-cd.yml` encadena los jobs como gates secuenciales:
 
 1. **lint** — `ruff check .`
-2. **test** — entrena un modelo de smoke y corre los 25 tests (`pytest`)
+2. **test** — entrena un modelo de smoke y corre los tests (`pytest`)
 3. **train-and-gate** — reentrena con datos reales y **bloquea el pipeline** si `ROC-AUC < 0.75`; publica `model.joblib`/`metadata.json` como artifact
-4. **docker-build** — descarga el artifact gateado, construye la imagen y la publica en Artifact Registry (sólo en push a `main`, y sólo si el proyecto de GCP ya está configurado — variable de repo `GCP_PROJECT_ID`)
-5. **deploy** — despliega a Cloud Run y corre un smoke test real contra `/health` en la URL pública
+4. **smoke-test** — **levanta el contenedor Docker real y consulta `/health` y `/predict` de verdad**; verifica que un payload inválido devuelve `422` (no `500`). Se ejecuta contra el contenedor, no contra el código fuente.
+5. **docker-build** — construye la imagen con el modelo gateado y la publica en Artifact Registry (sólo en push a `main`)
+6. **deploy** — despliega a Cloud Run y hace un smoke test contra `/health` en la URL pública
+7. **publish-ghcr** — al crear un tag `v*.*.*`, publica la imagen en GHCR
+
+El workflow se dispara en push/PR a `main` y `dev`, y en tags `v*.*.*`.
 
 ## 9. Despliegue en Google Cloud Run
 
@@ -275,8 +298,7 @@ Declaradas con honestidad técnica, verificadas durante el desarrollo:
 - **Precision baja en la clase de interés (0.386).** De cada 10 clientes que el modelo marca como riesgo de fuga, más de 6 no se habrían ido. Es una consecuencia de priorizar recall (0.708) sobre precision para este caso de negocio — perder un cliente cuesta más que ofrecer una retención de más — pero implica que una campaña basada en estas predicciones gasta en clientes que no la necesitaban.
 - **Sin validación temporal.** El split es aleatorio estratificado, no por fecha; el dataset no trae marca temporal, así que no se puede verificar si el modelo se degrada con el tiempo.
 - **El servicio no distingue "degradado" de "caído".** Si el artefacto del modelo falta o está corrupto al arrancar, todo el proceso falla en el arranque (`Application startup failed`) en vez de levantar en un estado degradado con `/health` reportándolo. No hay term medio entre "todo funciona" y "no responde nada".
-- **El CI/CD solo valida automáticamente contra `main`.** Los PRs hacia `dev` (la rama de integración del equipo) no disparan el pipeline todavía; se depende de que cada integrante corra `pytest`/`ruff` en local antes de mergear.
-- **El job de build y despliegue a Cloud Run aún no se ha ejecutado en CI.** Está condicionado a que existan las variables `GCP_PROJECT_ID`/`GCP_REGION` y el secret `GCP_SA_KEY`, que todavía no están configurados en el repositorio.
+- **El despliegue a Cloud Run corre solo en `main`.** GCP ya está configurado (Artifact Registry, service account con roles mínimos, y GitHub Secrets/Variables `GCP_SA_KEY`/`GCP_PROJECT_ID`/`GCP_REGION`). La URL pública existe desde el primer push a `main`; hasta entonces el pipeline valida todo excepto el deploy real.
 - **La imagen Docker pesa cerca de 1.2 GB.** El `Dockerfile` no usa build multi-etapa y deja instalado `build-essential` en la imagen final, lo que afecta el tiempo de arranque en frío en un entorno serverless.
 - **No hay validación de rango ni detección de drift.** Una predicción sobre un cliente con valores muy fuera de lo visto en entrenamiento (por ejemplo, `Balance` extremadamente alto) se sirve igual, sin ninguna advertencia.
 
