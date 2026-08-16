@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Cloud Run inyecta PORT en runtime; 8080 es el default de Cloud Run.
     port: int = 8080
     log_level: str = "info"
+    # Cota dura de /predict/batch. El plan de Cloud Run corre con 512Mi; sin
+    # este tope, un batch arbitrariamente grande podria agotar la memoria del
+    # contenedor antes de que el request termine.
+    max_batch_size: int = 500
 
 
 @lru_cache

@@ -29,6 +29,9 @@ from training.model import build_model
 DEFAULT_DATA_PATH = Path("data/Churn_Modelling.csv")
 DEFAULT_MODEL_DIR = Path("models")
 DEFAULT_AUC_THRESHOLD = 0.75
+# Semilla fija para reproducibilidad: mismo valor usado en el split
+# (training/data.py) y en LogisticRegression (training/model.py).
+DEFAULT_RANDOM_STATE = 42
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=DEFAULT_AUC_THRESHOLD,
         help="ROC-AUC mínimo para que el modelo pase el gate de CI/CD.",
+    )
+    parser.add_argument(
+        "--random-state",
+        type=int,
+        default=DEFAULT_RANDOM_STATE,
+        help="Semilla para el split train/test, para resultados reproducibles.",
     )
     return parser.parse_args()
 
@@ -53,7 +62,9 @@ def main() -> int:
     balance = class_balance(raw)
     print(f"[train] Balance de clases real: {balance}")
 
-    X_train, X_test, y_train, y_test = get_dataset(args.data)
+    X_train, X_test, y_train, y_test = get_dataset(
+        args.data, random_state=args.random_state
+    )
     print(f"[train] Train: {len(X_train)} filas | Test: {len(X_test)} filas")
 
     model = build_model()
@@ -82,6 +93,7 @@ def main() -> int:
         "class_balance": balance,
         "metrics_test_set": metrics,
         "auc_threshold": args.auc_threshold,
+        "random_state": args.random_state,
         "gate_passed": passed,
         "features": {
             "categorical": ["Geography", "Gender", "AgeGroup (derivado de Age)"],
