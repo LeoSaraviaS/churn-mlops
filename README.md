@@ -6,7 +6,7 @@ Servicio de **predicción de fuga de clientes (customer churn)** para una entida
 ## Servicio en producción (Google Cloud Run)
 
 **URL pública:** https://churn-api-373252903708.southamerica-west1.run.app
-*(reemplazar por la URL exacta que entregue el job `deploy` de Actions)*
+
 
 Probar sin instalar nada:
 
