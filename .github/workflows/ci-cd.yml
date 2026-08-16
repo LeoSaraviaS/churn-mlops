@@ -7,10 +7,10 @@ name: CI/CD - churn-api
 # todavía no exista, sin que eso rompa el resto del pipeline.
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*.*.*"]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 env:
   PYTHON_VERSION: "3.12"
@@ -89,13 +89,76 @@ jobs:
             models/metadata.json
           retention-days: 14
 
+  # 3.5) SMOKE-TEST: prueba de humo sobre el CONTENEDOR LEVANTADO (no sobre
+  #      el código fuente). Construye la imagen con el modelo que pasó el
+  #      gate, la levanta como contenedor real y le pega por HTTP a /health
+  #      y /predict de verdad. Cumple el requisito de la rúbrica: "la prueba
+  #      de humo se ejecuta contra el contenedor levantado". Corre siempre
+  #      (push y PR), sin depender de GCP.
+  smoke-test:
+    needs: train-and-gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Descargar el modelo gateado
+        uses: actions/download-artifact@v4
+        with:
+          name: trained-model
+          path: models/
+
+      - name: Construir la imagen Docker
+        run: docker build -t churn-api:ci .
+
+      - name: Levantar el contenedor
+        run: docker run -d --name churn-smoke -p 8080:8080 churn-api:ci
+
+      - name: Esperar a que /health responda
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS http://localhost:8080/health; then
+              echo "" && echo "Servicio arriba."
+              exit 0
+            fi
+            echo "Intento $i: aún no responde, esperando 3s..."
+            sleep 3
+          done
+          echo "El servicio no respondió a tiempo. Logs del contenedor:"
+          docker logs churn-smoke
+          exit 1
+
+      - name: Smoke test de /health (modelo cargado)
+        run: |
+          curl -fsS http://localhost:8080/health | tee health.json
+          grep -q '"model_loaded":true' health.json
+
+      - name: Smoke test de /predict (payload válido, 200)
+        run: |
+          curl -fsS -X POST http://localhost:8080/predict \
+            -H "Content-Type: application/json" \
+            -d '{"CreditScore":650,"Geography":"France","Gender":"Female","Age":40,"Tenure":3,"Balance":75000.0,"NumOfProducts":2,"HasCrCard":1,"IsActiveMember":1,"EstimatedSalary":100000.0}' \
+            | tee predict.json
+          grep -q '"churn_prediction"' predict.json
+
+      - name: Smoke test de /predict (payload inválido, 422)
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8080/predict \
+            -H "Content-Type: application/json" \
+            -d '{"CreditScore":650,"Geography":"Chile","Gender":"Female","Age":40,"Tenure":3,"Balance":75000.0,"NumOfProducts":2,"HasCrCard":1,"IsActiveMember":1,"EstimatedSalary":100000.0}')
+          echo "HTTP status recibido: $code"
+          test "$code" = "422"
+
+      - name: Limpiar el contenedor
+        if: always()
+        run: docker rm -f churn-smoke
+
   # 4) DOCKER-BUILD: construye la imagen con el modelo recién gateado y la
   #    publica en Artifact Registry. Sólo corre si el repo ya tiene
   #    configuradas las variables de GCP (vars.GCP_PROJECT_ID) — mientras el
   #    proyecto de GCP con billing no exista, este job se salta limpiamente
   #    en vez de fallar el pipeline completo.
   docker-build:
-    needs: train-and-gate
+    needs: smoke-test
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.GCP_PROJECT_ID != ''
     permissions:
@@ -138,7 +201,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-    # 5) PUBLISH-GHCR: publica la imagen Docker al crear un tag de versión
+  # 5) PUBLISH-GHCR: publica la imagen Docker al crear un tag de versión
   publish-ghcr:
     needs: train-and-gate
     runs-on: ubuntu-latest
