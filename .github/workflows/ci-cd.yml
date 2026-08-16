@@ -203,7 +203,7 @@ jobs:
 
   # 5) PUBLISH-GHCR: publica la imagen Docker al crear un tag de versión
   publish-ghcr:
-    needs: train-and-gate
+    needs: smoke-test
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
