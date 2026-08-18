@@ -7,6 +7,7 @@ Servicio de **predicción de fuga de clientes (customer churn)** para una entida
 
 **URL pública:** https://churn-api-373252903708.southamerica-west1.run.app
 
+**Video con demostración:** https://drive.google.com/file/d/1FNfVUgJO9VV8pQbkKk_2qFncmm8Hm-LI/view?usp=drive_link
 
 Probar sin instalar nada:
 
